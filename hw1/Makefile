@@ -2,11 +2,14 @@ CXX = g++
 INCLUDE_DIR = ./include
 SRC_DIR = ./src
 OBJ_DIR = ./obj
-FLAGS =-I$(INCLUDE_DIR) -std=c++11 -g -O2 -Wunused-result
+CFLAGS = -std=c++11 -g -O2 -Wunused-result
 
-all: 
-	    -mkdir obj
-#	    make server 
+PROG = main
 
+all: $(PROG)
+
+%: $(SRC_DIR)/%.cpp
+	$(CXX) -o hw1 $(CFLAGS) $<
 
 clean:
+	rm -f $(PROG)
