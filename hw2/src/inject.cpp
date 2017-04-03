@@ -6,6 +6,7 @@
 #include <stdarg.h>
 #include <fcntl.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #define EMPTY_STRING  ""
 #define NULL_STRING "(null)"
@@ -24,7 +25,6 @@
       fprintf(stderr, "link lib %s failed\n", symbol ); \
     SET_FP(); \
   }  
-
 
 
 /* general proto */
@@ -76,7 +76,7 @@ static int (*old_dup2)(int,int) = NULL;
 static void (*old__exit)(int) = NULL;
 static int (*old_execl)(const char*, const char*, ...) = NULL;
 static int (*old_execle)(const char*, const char*, ...) = NULL;
-static int (*old_execlp)(const char*, const char*) = NULL;
+static int (*old_execlp)(const char*, const char*, ...) = NULL;
 static int (*old_execv)(const char*, char *const []) = NULL;
 static int (*old_execve)(const char*, char *const [], char *const []) = NULL;
 static int (*old_execvp)(const char*, char *const []) = NULL;
@@ -109,12 +109,16 @@ static ssize_t (*old_write)(int, const void*, size_t) = NULL;
 /* sys_stat.h */
 static int (*old_chmod)(const char*, mode_t) = NULL;
 static int (*old_fchmod)(int, mode_t) = NULL;
-static int (*old_fstat)(int, struct stat*) = NULL;
-static int (*old_lstat)(const char*, struct stat*) = NULL;
+static int (*old_fstat)(int, int, struct stat*) = NULL;
+static int (*old_lstat)(int, const char*, struct stat*) = NULL;
 static int (*old_mkdir)(const char*, mode_t) = NULL;
 static int (*old_mkfifo)(const char*, mode_t) = NULL;
-static int (*old_stat)(const char*, struct stat*) = NULL;
+static int (*old_stat)(int, const char*, struct stat*) = NULL;
 static mode_t (*old_umask)(mode_t) = NULL;
+
+/* addition part */
+static int (*old_fflush)(FILE*) = NULL;
+
 
 /* general function */ 
 void set_output_file(){
@@ -261,6 +265,7 @@ char* tmpnam(char* name){
   return ret;
 }
 
+
 /* stdlib.h injection implementaton */
 void exit(int status){
   INJECT_SYMBOL("libc.so.6", old_exit, "exit", void(*)(int));
@@ -332,13 +337,256 @@ int system(const char* cmd){
 
 }
 
+
 /* unistd.h injection implementation */
+int chdir(const char* path){
+  INJECT_SYMBOL("libc.so.6", old_chdir, "chdir", int(*)(const char*));
+  int ret = old_chdir(path);
+  fprintf(out, "[monitor] chdir('%s') = %d\n", path, ret);
+  return ret;
+}
+
+int chown(const char* path, uid_t uid, gid_t gid){
+  INJECT_SYMBOL("libc.so.6", old_chown, "chown", int(*)(const char*, uid_t, gid_t));
+  int ret = old_chown(path, uid, gid);
+  fprintf(out, "[monitor] chown('%s', %u, %u) = %d\n", path, uid, gid, ret);
+  return ret;
+}
+
+int close(int fd){
+  INJECT_SYMBOL("libc.so.6", old_close, "close", int(*)(int));
+  int ret = old_close(fd);
+  fprintf(out, "[monitor] close(%d) = %d\n", fd, ret);
+  return ret;
+}
+
+int dup(int fd){
+  INJECT_SYMBOL("libc.so.6", old_dup, "dup", int(*)(int));
+  int ret = old_dup(fd);
+  fprintf(out, "[monitor] dup(%d) = %d\n", fd, ret);
+  return ret;
+}
+
+int dup2(int fd1,int fd2){
+  INJECT_SYMBOL("libc.so.6", old_dup2, "dup2", int(*)(int,int));
+  int ret = old_dup2(fd1, fd2);
+  fprintf(out, "[monitor] fchdir(%d, %d) = %d\n", fd1, fd2, ret);
+  return ret;
+}
+
+void _exit(int status){
+  INJECT_SYMBOL("libc.so.6", old__exit, "_exit", void(*)(int));
+  fprintf(out, "[monitor] _exit(%d)\n", status);
+  old__exit(status);
+}
+
+/*int execl(const char*, const char*, ...){
+
+}
+int (*old_execle)(const char*, const char*, ...) = NULL;
+
+int execlp(const char* path, const char* cmd, ...){
+  INJECT_SYMBOL("libc.so.6", old_execlp, "execlp", int(*)(const char*, const char*));
+  int ret = old_execlp(path, cmd);
+  fprintf(out, "[monitor] execlp('%s', '%s') = %d\n", path == NULL ? NULL_STRING : path, cmd == NULL ? NULL_STRING : cmd, ret);
+  return ret;
+}*/
+
+int execv(const char* path, char *const cmd[]){
+  INJECT_SYMBOL("libc.so.6", old_execv, "execn", int(*)(const char*, char *const []));
+  int ret = old_execv(path, cmd);
+  fprintf(out, "[monitor] execv('%s', ('%s', ... )) = %d\n", path, cmd[0] == NULL ? NULL_STRING : cmd[0], ret);
+  return ret;
+}
+int execve(const char* path, char *const cmd1[], char *const cmd2[]){
+  INJECT_SYMBOL("libc.so.6", old_execve, "execve", int(*)(const char* ,char *const [], char *const []));
+  int ret = old_execve(path, cmd1, cmd2);
+  fprintf(out, "[monitor] fchdir('%s', ('%s', ...), ('%s', ...)) = %d\n", path, cmd1[0] == NULL ? NULL_STRING : cmd1[0], cmd2[0] == NULL ? NULL_STRING : cmd2[0], ret);
+  return ret;
+}
+
+int execvp(const char* path, char *const argv[]){
+  INJECT_SYMBOL("libc.so.6", old_execvp, "execvp", int(*)(const char*, char *const []));
+  int ret = old_execvp(path, argv);
+  fprintf(out, "[monitor] execvp('%s', '%s', ...) = %d\n", path, argv[0] == NULL ? NULL_STRING : argv[0], ret);
+  return ret;
+
+}
+
+int fchdir(int fd){
+  INJECT_SYMBOL("libc.so.6", old_fchdir, "fchdir", int(*)(int));
+  int ret = old_fchdir(fd);
+  fprintf(out, "[monitor] fchdir(%d) = %d\n", fd, ret);
+  return ret;
+}
+
+int fchown(int fd, uid_t uid, gid_t gid){
+  INJECT_SYMBOL("libc.so.6", old_fchown, "fchown", int(*)(int, uid_t, gid_t));
+  int ret = old_fchown(fd, uid, gid);
+  fprintf(out, "[monitor] chmod(%d, %d, %d) = %d\n", fd, uid, gid, ret);
+  return ret;
+}
+
+pid_t fork(void){
+  INJECT_SYMBOL("libc.so.6", old_fork, "fork", int(*)(void));
+  int ret = old_fork();
+  fprintf(out, "[monitor] fork() = %d\n",  ret);
+  return ret;
+}
+
+int fsync(int fd){
+  INJECT_SYMBOL("libc.so.6", old_fsync, "fsync", int(*)(int));
+  int ret = old_fsync(fd);
+  fprintf(out, "[monitor] fsync(%d) = %d\n", fd, ret);
+  return ret;
+}
+
+int ftruncate(int fd, off_t offset){
+  INJECT_SYMBOL("libc.so.6", old_ftruncate, "ftruncate", int(*)(int, off_t));
+  int ret = old_ftruncate(fd, offset);
+  fprintf(out, "[monitor] ftruncate(%d, %lu) = %d\n", fd, offset, ret);
+  return ret;
+}
+
+char* getcwd(char* path, size_t size){
+  INJECT_SYMBOL("libc.so.6", old_getcwd, "getcwd", char*(*)(char*, size_t));
+  char* ret = old_getcwd(path, size);
+  fprintf(out, "[monitor] getcwd('%s', %lu) = %s\n", path, size, ret == NULL ? NULL_STRING : ret);
+  return ret;
+}
+
+gid_t getegid(void){
+  INJECT_SYMBOL("libc.so.6", old_getegid, "getegid", gid_t(*)(void));
+  int ret = old_getegid();
+  fprintf(out, "[monitor] getegid() = %u\n", ret);
+  return ret;
+}
+
+uid_t geteuid(void){
+  INJECT_SYMBOL("libc.so.6", old_geteuid, "geteuid", uid_t(*)(void));
+  int ret = old_geteuid();
+  fprintf(out, "[monitor] geteuid() = %d\n", ret);
+  return ret;
+}
+
+gid_t getgid(void){
+  INJECT_SYMBOL("libc.so.6", old_getgid, "getgid", gid_t(*)(void));
+  int ret = old_getgid();
+  fprintf(out, "[monitor] getgid() = %d\n", ret);
+  return ret;
+}
+
 uid_t getuid(void){
   INJECT_SYMBOL("libc.so.6", old_getuid, "getuid", uid_t(*)(void));
   uid_t ret = old_getuid();
   fprintf(out, "[monitor] getuid() = %d\n", ret);
   return ret;
 }
+
+int link(const char* target, const char* src){
+  INJECT_SYMBOL("libc.so.6", old_link, "link", int(*)(const char*, const char*));
+  int ret = old_link(target, src);
+  fprintf(out, "[monitor] link('%s', '%s') = %d\n", target, src, ret);
+  return ret;
+}
+
+int pipe(int fd[2]){
+  INJECT_SYMBOL("libc.so.6", old_pipe, "pipe", int(*)(int [2]));
+  int ret = old_pipe(fd);
+  fprintf(out, "[monitor] pipe(%p) = %d\n", fd, ret);
+  return ret;
+}
+
+ssize_t pread(int n, void* buf, size_t size, off_t offset){
+  INJECT_SYMBOL("libc.so.6", old_pread, "pread", ssize_t(*)(int, void*, size_t, off_t));
+  ssize_t ret = old_pread(n, buf, size, offset);
+  fprintf(out, "[monitor] getuid(%d, %p, %lu, %lu) = %lu\n", n, buf, size, offset, ret);
+  return ret;
+}
+
+ssize_t pwrite(int n, const void* buf, size_t size, off_t offset){
+  INJECT_SYMBOL("libc.so.6", old_pwrite, "pwrite", ssize_t(*)(int, const void*, size_t, off_t));
+  ssize_t ret = old_pwrite(n, buf, size, offset);
+  fprintf(out, "[monitor] pwrite(%d, %p, %lu, %lu) = %lu\n", n, buf, size, offset, ret);
+  return ret;
+}
+
+ssize_t read(int fd, void* buf, size_t len){
+  INJECT_SYMBOL("libc.so.6", old_read, "read", ssize_t(*)(int, void*, size_t));
+  ssize_t ret = old_read(fd, buf, len);
+  fprintf(out, "[monitor] read(%d, %p, %lu) = %ld\n", fd, buf, len, ret);
+  return ret;
+}
+
+ssize_t readlink(const char* path, char* n, size_t len){
+  INJECT_SYMBOL("libc.so.6", old_readlink, "readlink", ssize_t(*)(const char*, char*, size_t));
+  ssize_t ret = old_readlink(path, n, len);
+  fprintf(out, "[monitor] readlink('%s', '%s', %lu) = %lu\n", path, n, len, ret);
+  return ret;
+}
+
+int rmdir(const char* path){
+  INJECT_SYMBOL("libc.so.6", old_rmdir, "rmdir", int(*)(const char*));
+  int ret = old_rmdir(path);
+  fprintf(out, "[monitor] rmdir('%s') = %d\n", path, ret);
+  return ret;
+}
+
+int setegid(gid_t gid){
+  INJECT_SYMBOL("libc.so.6", old_setegid, "setegid", int(*)(gid_t));
+  int ret = old_setegid(gid);
+  fprintf(out, "[monitor] setegid(%u) = %d\n", gid, ret);
+  return ret;
+}
+
+int seteuid(uid_t uid){
+  INJECT_SYMBOL("libc.so.6", old_seteuid, "seteuid", int(*)(uid_t));
+  int ret = old_seteuid(uid);
+  fprintf(out, "[monitor] seteuid(%u) = %d\n", uid, ret);
+  return ret;
+}
+
+int setgid(gid_t gid){
+  INJECT_SYMBOL("libc.so.6", old_setgid, "setgid", int(*)(gid_t));
+  int ret = old_setgid(gid);
+  fprintf(out, "[monitor] setgid(%u) = %d\n", gid, ret);
+  return ret;
+}
+
+int setuid(uid_t uid){
+  INJECT_SYMBOL("libc.so.6", old_setuid, "setuid", int(*)(uid_t));
+  int ret = old_setuid(uid);
+  fprintf(out, "[monitor] setuid(%d) = %d\n", uid, ret);
+  return ret;
+}
+unsigned sleep(unsigned sec){
+  INJECT_SYMBOL("libc.so.6", old_sleep, "sleep", unsigned(*)(unsigned));
+  unsigned ret = old_sleep(sec);
+  fprintf(out, "[monitor] sleep(%u) = %d\n", sec, ret);
+  return ret;
+}
+
+int symlink(const char* dst, const char* src){
+  INJECT_SYMBOL("libc.so.6", old_symlink, "symlink", int(*)(const char*, const char*));
+  int ret = old_symlink(dst, src);
+  fprintf(out, "[monitor] rmdir('%s', '%s') = %d\n", dst, src, ret);
+  return ret;
+}
+
+int unlink(const char* path){
+  INJECT_SYMBOL("libc.so.6", old_unlink, "unlink", int(*)(const char*));
+  int ret = old_unlink(path);
+  fprintf(out, "[monitor] unlink('%s') = %d\n", path, ret);
+  return ret;
+}
+
+ssize_t write(int fd, const void* buf, size_t len){
+  INJECT_SYMBOL("libc.so.6", old_write, "write", ssize_t(*)(int, const void*, size_t));
+  int ret = old_write(fd, buf, len);
+  fprintf(out, "[monitor] rmdir(%d, %p, %lu) = %d\n", fd, buf, len, ret);
+  return ret;
+}
+
 
 /* sys_stat.h injection implementation */
 int chmod(const char* path, mode_t mode){
@@ -355,17 +603,17 @@ int fchmod(int n, mode_t mode){
   return ret;
 }
 
-int fstat(int fd, struct stat* st){
-  INJECT_SYMBOL("libc.so.6", old_fstat, "__fxstat", int(*)(int, struct stat*));
-  int ret = old_fstat(fd, st);
-  fprintf(out, "[monitor] __fxstat(%d, %p) = %d\n", fd, st, ret);
+int __fxstat(int ver, int fd, struct stat* st){
+  INJECT_SYMBOL("libc.so.6", old_fstat, "__fxstat", int(*)(int, int, struct stat*));
+  int ret = old_fstat(ver, fd, st);
+  fprintf(out, "[monitor] __fxstat(%d, %d, %p) = %d\n", ver, fd, st, ret);
   return ret;
 }
 
-int lstat(const char* path, struct stat* st){
-  INJECT_SYMBOL("libc.so.6", old_lstat, "__lxstat", int(*)(const char*, struct stat*));
-  int ret = old_lstat(path, st);
-  fprintf(out, "[monitor] __lxstat('%s', %p) = %d\n", path, st, ret);
+int __lxstat(int version, const char* path, struct stat* st){
+  INJECT_SYMBOL("libc.so.6", old_lstat, "__lxstat", int(*)(int, const char*, struct stat*));
+  int ret = old_lstat(version, path, st);
+  fprintf(out, "[monitor] __lxstat(%d, '%s', %p) = %d\n", version, path, st, ret);
   return ret;
 }
 
@@ -383,10 +631,10 @@ int mkfifo(const char* name, mode_t mode){
   return ret;
 }
 
-int stat(const char* path, struct stat* st){
-  INJECT_SYMBOL("libc.so.6", old_stat, "__xstat", int(*)(const char*, struct stat*));
-  int ret = old_stat(path, st);
-  fprintf(out, "[monitor] __xstat('%s', %p) = %d\n", path, st, ret);
+int __xstat(int ver, const char* path, struct stat* st){
+  INJECT_SYMBOL("libc.so.6", old_stat, "__xstat", int(*)(int,const char*, struct stat*));
+  int ret = old_stat(ver, path, st);
+  fprintf(out, "[monitor] __xstat(%d, '%s', %p) = %d\n", ver, path, st, ret);
   return ret;
 }
 
@@ -396,4 +644,3 @@ mode_t umask(mode_t mode){
   fprintf(out, "[monitor] umask(%d) = %d\n", mode, ret);
   return ret;
 }
-
