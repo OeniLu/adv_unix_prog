@@ -162,11 +162,11 @@ char* get_sock_info(const struct sockaddr* addr){
   char *ip = (char*)malloc(sizeof(char)*256);
   if ( addr->sa_family == AF_INET6 ){
     struct in6_addr addr_6 = ((struct sockaddr_in6*)addr)->sin6_addr;
-    inet_ntop(AF_INET6, &addr_6, ip, sizeof(ip));
+    inet_ntop(AF_INET6, &addr_6, ip, INET6_ADDRSTRLEN);
   }
   else if( addr->sa_family == AF_INET ){
     struct in_addr addr_4 = ((struct sockaddr_in*)addr)->sin_addr;
-    inet_ntop(AF_INET, &addr, ip, sizeof(ip));
+    inet_ntop(AF_INET, &addr_4, ip, INET_ADDRSTRLEN);
   }
   else if (addr->sa_family == AF_UNIX)
     strcpy(ip, "DOMAIN SOCKET");
