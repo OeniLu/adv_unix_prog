@@ -11,8 +11,8 @@ PROG = inject
 
 all: $(PROG)
 
-%: $(SRC_DIR)/%.cpp
-	$(CXX) -o hw2.so $(CFLAGS) $< $(LINK) 
+%: $(SRC_DIR)/%.c
+	$(CC) -o hw2.so $(CFLAGS) $< $(LINK) 
 
 clean:
 	rm -f $(PROG)
