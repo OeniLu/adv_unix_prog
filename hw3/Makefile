@@ -15,3 +15,5 @@ shell.o: $(SRC_DIR)/shell.cpp
 shell: shell.o jobs.o
 	$(CXX) -o $@ $(CFLAGS) $^
 
+clean:
+	rm -f jobs.o shell.o shell

@@ -62,7 +62,7 @@ private:
   void wait_for_job(Job*);
 
   void dup_origin();
-  void dup_fd(int, int**);
+  void dup_fd(int, int[][2]);
 
   char** parse_single_cmd(int);
 
@@ -75,13 +75,13 @@ void sig_child(int signo)
   int status;
   Process* p;
   while ( (pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0 ){
-    fprintf(stderr, "handler, %d, %d\n", pid, getpid());
-    fflush(stderr);
+    //fprintf(stderr, "handler, %d, %d\n", pid, getpid());
+    //fflush(stderr);
     for (auto& j: job_list){
       if ( (p = job_find_process(j.second, pid)) != NULL){
         if (WIFSTOPPED(status))
-          p->stopped = true;
-        else{
+          make_job_stop(j.second);
+        else if ((WIFEXITED(status) || WEXITSTATUS(status) || WIFSIGNALED(status) || WCOREDUMP(status))){
           p->completed = true;
           if (job_is_completed(j.second)){
             if (j.second->background == true){
@@ -108,16 +108,30 @@ void sig_tstp(int signo){
   }
 }
 
+void sig_int(int signo){
+  if (SH::fg_pgid != getpid()){
+    kill(-SH::fg_pgid, SIGINT); 
+  }
+}
+
+void sig_quit(int signo){
+  if (SH::fg_pgid != getpid()){
+    kill(-SH::fg_pgid, SIGQUIT); 
+  }
+}
+
 void SH::wait_for_job(Job* j){
   Process* p;
-  while(!job_is_stopped(j)){
+  while(!job_is_stopped(j) && job_list.find(j->id) != job_list.end()){
     int status;
-    int pid = waitpid(-j->pgid, &status, WNOHANG | WUNTRACED);
+    int pid = waitpid(-j->pgid, &status, WUNTRACED);
+    //fprintf(stderr, "wait: %d, %d\n", pid, getpid());
+    //fflush(stderr);
     if (pid > 0){
       p = job_find_process(j, pid);
       if (WIFSTOPPED(status))
         p->stopped = true;
-      else
+      else if ((WIFEXITED(status) || WEXITSTATUS(status) || WIFSIGNALED(status) || WCOREDUMP(status)))
         p->completed = true;
     }
     usleep(100000);
@@ -128,8 +142,8 @@ void SH::dup_origin(){
   dup2(origin_stdin, STDIN_FILENO); 
   dup2(origin_stdout, STDOUT_FILENO); 
 }
-
-void SH::dup_fd(int i, int** pip){
+ 
+void SH::dup_fd(int i, int pip[][2]){
   if (i!=0) 
     dup2(pip[i-1][0], STDIN_FILENO); 
   if (i != pipe_num ) 
@@ -150,7 +164,7 @@ void SH::do_internal(char** cmd){
   {
     auto j = job_list.begin();
     j->second->background = true;
-    if(j != job_list.end() && job_is_stopped(j->second));
+    if(j != job_list.end() && job_is_stopped(j->second))
       kill(-j->second->pgid, SIGCONT);
   }
   else if (strcmp(cmd[0], "unset") == 0){
@@ -212,8 +226,20 @@ bool SH::internal(char** cmd)
 void SH::init()
 {
   shell_pgid = getpid();
+  SH::fg_pgid = shell_pgid;
+  
   origin_stdin = dup(STDIN_FILENO);
   origin_stdout = dup(STDOUT_FILENO);
+  setpgid(getpid(), shell_pgid);
+  tcsetpgrp(shell_pgid, shell_pgid);
+  
+  signal(SIGINT, &sig_int);
+  signal(SIGQUIT, &sig_quit);
+  signal(SIGTTIN, SIG_IGN);
+  signal(SIGTTOU, SIG_IGN);
+  signal(SIGCHLD, &sig_child);
+  signal(SIGTSTP, &sig_tstp);
+
 }
 
 void SH::prompt()
@@ -228,7 +254,9 @@ void SH::prompt()
 
   fprintf(stderr, "%s", prompt_string);
   fflush(stderr);
-  getline(cin, cmd);
+  if (!getline(cin, cmd)){
+    exit(0);
+  }
 }
 
 vector<string> SH::parse_glob(string& pattern)
@@ -399,6 +427,14 @@ void SH::do_command()
         else if (child_pid == 0) 
         { 
           dup_fd(i, pip);
+          if (first == 0){
+            tcsetpgrp(0, getpid());
+            setpgid(getpid(), getpid());
+          }
+          else{
+            tcsetpgrp(0, first);
+            setpgid(getpid(), first);
+          }
           if( execvp(single_cmd[0],single_cmd) < 0 ) 
           { 
             printf("Command : %s not found.\n", single_cmd[0]); 
@@ -410,17 +446,16 @@ void SH::do_command()
           if (first == 0){ 
             SH::fg_pgid = child_pid; 
             first = child_pid; 
-            setpgid(child_pid, first); 
+
             while(job_list.find(++j_id) != job_list.end()); 
             p = new Process(child_pid, single_cmd); 
             j = new Job(j_id, child_pid, p, background); 
             job_list[j_id] = j; 
           } 
           else{ 
-            setpgid(child_pid, first); 
             p -> next = new Process(child_pid, single_cmd); 
             p = p -> next; 
-          } 
+          }
           if(i!=0) 
             close(pip[i-1][0]); 
           if (i!=pipe_num) 
@@ -440,6 +475,7 @@ void SH::do_command()
       }
     }
   }
+  tcsetpgrp(0, shell_pgid);
   SH::fg_pgid = shell_pgid;
 }
 
@@ -449,12 +485,10 @@ void SH::start()
   while (true)
   { 
     prompt();
-    //sigprocmask(SIG_BLOCK, &block_sigchild, NULL);
     cmd_split_operators("<>|&");
     cmd_extension();
     scan();
     do_command();  
-    //sigprocmask(SIG_UNBLOCK, &block_sigchild, NULL);
   }
 }
 
@@ -462,8 +496,6 @@ void SH::start()
 
 int main(void)
 {
-  signal(SIGCHLD, &sig_child);
-  signal (SIGTSTP, &sig_tstp);
   SH shell;
   shell.start();
   
