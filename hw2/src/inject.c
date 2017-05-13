@@ -7,6 +7,12 @@
 #include <fcntl.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <errno.h>
+#include <limits.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netdb.h>
 
 #define EMPTY_STRING  ""
 #define NULL_STRING "(null)"
@@ -26,6 +32,22 @@
     SET_FP(); \
   }  
 
+#define PARSE_ARGV \
+  va_list ap, ap_count; \
+  va_start(ap, argv); \
+  va_copy(ap_count, ap); \
+  int count = 0; \
+  const char* tmp = argv; \
+  while(tmp != NULL){ \
+    count++; \
+    tmp = va_arg(ap_count, const char*); \
+  } \
+  char* new_argv[count+1]; \
+  int count_2 = 0; tmp = argv; \
+  while (count_2 <= count){ \
+    new_argv[count++] = (char*)tmp; \
+    tmp = va_arg(ap_count, char*); \
+  }
 
 /* general proto */
 FILE* out = NULL;
@@ -117,7 +139,11 @@ static int (*old_stat)(int, const char*, struct stat*) = NULL;
 static mode_t (*old_umask)(mode_t) = NULL;
 
 /* addition part */
-static int (*old_fflush)(FILE*) = NULL;
+static int (*old_accept)(int, struct sockaddr*, socklen_t*) = NULL;
+static int (*old_bind)(int, const struct sockaddr*, socklen_t) = NULL;
+static int (*old_connect)(int, const struct sockaddr*, socklen_t) = NULL;
+static int (*old_socket)(int, int, int) = NULL;
+static int (*old_setsockopt)(int, int, int, const void*, socklen_t) = NULL;
 
 
 /* general function */ 
@@ -131,6 +157,22 @@ void set_output_file(){
     out = stdout;
   else
     out = fopen(file ,"w");
+}
+char* get_sock_info(const struct sockaddr* addr){
+  char *ip = (char*)malloc(sizeof(char)*256);
+  if ( addr->sa_family == AF_INET6 ){
+    struct in6_addr addr_6 = ((struct sockaddr_in6*)addr)->sin6_addr;
+    inet_ntop(AF_INET6, &addr_6, ip, INET6_ADDRSTRLEN);
+  }
+  else if( addr->sa_family == AF_INET ){
+    struct in_addr addr_4 = ((struct sockaddr_in*)addr)->sin_addr;
+    inet_ntop(AF_INET, &addr_4, ip, INET_ADDRSTRLEN);
+  }
+  else if (addr->sa_family == AF_UNIX)
+    strcpy(ip, "DOMAIN SOCKET");
+  else
+    strcpy(ip, "Unknown type!");
+  return ip;
 }
 
 /* dirent.h injection implementation */
@@ -370,7 +412,7 @@ int dup(int fd){
 int dup2(int fd1,int fd2){
   INJECT_SYMBOL("libc.so.6", old_dup2, "dup2", int(*)(int,int));
   int ret = old_dup2(fd1, fd2);
-  fprintf(out, "[monitor] fchdir(%d, %d) = %d\n", fd1, fd2, ret);
+  fprintf(out, "[monitor] dup2(%d, %d) = %d\n", fd1, fd2, ret);
   return ret;
 }
 
@@ -379,18 +421,6 @@ void _exit(int status){
   fprintf(out, "[monitor] _exit(%d)\n", status);
   old__exit(status);
 }
-
-/*int execl(const char*, const char*, ...){
-
-}
-int (*old_execle)(const char*, const char*, ...) = NULL;
-
-int execlp(const char* path, const char* cmd, ...){
-  INJECT_SYMBOL("libc.so.6", old_execlp, "execlp", int(*)(const char*, const char*));
-  int ret = old_execlp(path, cmd);
-  fprintf(out, "[monitor] execlp('%s', '%s') = %d\n", path == NULL ? NULL_STRING : path, cmd == NULL ? NULL_STRING : cmd, ret);
-  return ret;
-}*/
 
 int execv(const char* path, char *const cmd[]){
   INJECT_SYMBOL("libc.so.6", old_execv, "execn", int(*)(const char*, char *const []));
@@ -401,7 +431,7 @@ int execv(const char* path, char *const cmd[]){
 int execve(const char* path, char *const cmd1[], char *const cmd2[]){
   INJECT_SYMBOL("libc.so.6", old_execve, "execve", int(*)(const char* ,char *const [], char *const []));
   int ret = old_execve(path, cmd1, cmd2);
-  fprintf(out, "[monitor] fchdir('%s', ('%s', ...), ('%s', ...)) = %d\n", path, cmd1[0] == NULL ? NULL_STRING : cmd1[0], cmd2[0] == NULL ? NULL_STRING : cmd2[0], ret);
+  fprintf(out, "[monitor] execve('%s', ('%s', ...), ('%s', ...)) = %d\n", path, cmd1[0] == NULL ? NULL_STRING : cmd1[0], cmd2[0] == NULL ? NULL_STRING : cmd2[0], ret);
   return ret;
 }
 
@@ -410,7 +440,49 @@ int execvp(const char* path, char *const argv[]){
   int ret = old_execvp(path, argv);
   fprintf(out, "[monitor] execvp('%s', '%s', ...) = %d\n", path, argv[0] == NULL ? NULL_STRING : argv[0], ret);
   return ret;
+}
 
+int execl(const char* path, const char* argv, ...){
+  PARSE_ARGV
+  int ret = execv(path, new_argv);
+  fprintf(out, "[monitor] execl('%s', '%s', ...) = %d\n", path, argv == NULL ? NULL_STRING : argv, ret);
+  return ret;
+}
+
+int execle(const char* path, const char* argv, ...){
+  int argc;
+  va_list ap;
+  va_start (ap, argv);
+  for (argc = 1; va_arg (ap, const char *); argc++)
+    {
+      if (argc == INT_MAX)
+	{
+	  va_end (ap);
+	  errno = E2BIG;
+	  return -1;
+	}
+    }
+  va_end (ap);
+  int i;
+  char *new_argv[argc + 1];
+  char **envp;
+  va_start (ap, argv);
+  new_argv[0] = (char *) argv;
+  for (i = 1; i <= argc; i++)
+    new_argv[i] = va_arg (ap, char *);
+  envp = va_arg (ap, char **);
+  va_end (ap);
+
+  int ret = execve(path, new_argv, envp);
+  fprintf(out, "[monitor] execle('%s', ('%s', ...), ('%s', ...)) = %d\n", path, argv == NULL ? NULL_STRING : argv, envp[0] == NULL ? NULL_STRING : envp[0], ret);
+  return ret;
+}
+
+int execlp(const char* path, const char* argv, ...){
+  PARSE_ARGV 
+  int ret = execvp(path, new_argv);
+  fprintf(out, "[monitor] execlp('%s', '%s', ...) = %d\n", path, argv == NULL ? NULL_STRING : argv, ret);
+  return ret;
 }
 
 int fchdir(int fd){
@@ -423,7 +495,7 @@ int fchdir(int fd){
 int fchown(int fd, uid_t uid, gid_t gid){
   INJECT_SYMBOL("libc.so.6", old_fchown, "fchown", int(*)(int, uid_t, gid_t));
   int ret = old_fchown(fd, uid, gid);
-  fprintf(out, "[monitor] chmod(%d, %d, %d) = %d\n", fd, uid, gid, ret);
+  fprintf(out, "[monitor] fchown(%d, %d, %d) = %d\n", fd, uid, gid, ret);
   return ret;
 }
 
@@ -569,7 +641,7 @@ unsigned sleep(unsigned sec){
 int symlink(const char* dst, const char* src){
   INJECT_SYMBOL("libc.so.6", old_symlink, "symlink", int(*)(const char*, const char*));
   int ret = old_symlink(dst, src);
-  fprintf(out, "[monitor] rmdir('%s', '%s') = %d\n", dst, src, ret);
+  fprintf(out, "[monitor] symlink('%s', '%s') = %d\n", dst, src, ret);
   return ret;
 }
 
@@ -583,7 +655,7 @@ int unlink(const char* path){
 ssize_t write(int fd, const void* buf, size_t len){
   INJECT_SYMBOL("libc.so.6", old_write, "write", ssize_t(*)(int, const void*, size_t));
   int ret = old_write(fd, buf, len);
-  fprintf(out, "[monitor] rmdir(%d, %p, %lu) = %d\n", fd, buf, len, ret);
+  fprintf(out, "[monitor] write(%d, %p, %lu) = %d\n", fd, buf, len, ret);
   return ret;
 }
 
@@ -644,3 +716,46 @@ mode_t umask(mode_t mode){
   fprintf(out, "[monitor] umask(%d) = %d\n", mode, ret);
   return ret;
 }
+
+/* addition part injection implementation */
+int accept(int fd, struct sockaddr* addr, socklen_t* len){
+  INJECT_SYMBOL("libc.so.6", old_accept, "accept", int(*)(int, struct sockaddr*, socklen_t*));
+  int ret = old_accept(fd, addr, len);
+  char *ip = get_sock_info(addr);  
+  fprintf(out, "[monitor] accept(%d, '%s', %u) = %d\n", fd, ip, *len, ret);
+  free(ip);
+  return ret;
+}
+
+int bind(int fd, const struct sockaddr* addr , socklen_t len){
+  INJECT_SYMBOL("libc.so.6", old_bind, "bind", int(*)(int, const struct sockaddr*, socklen_t));
+  int ret = old_bind(fd, addr, len);
+  char *ip = get_sock_info(addr);  
+  fprintf(out, "[monitor] bind(%d, '%s', %u) = %d\n", fd, ip, len, ret);
+  free(ip);
+  return ret;
+}
+
+int connect(int fd, const struct sockaddr* addr, socklen_t len){
+  INJECT_SYMBOL("libc.so.6", old_connect, "connect", int(*)(int, const struct sockaddr*, socklen_t));
+  int ret = old_connect(fd, addr, len);
+  char *ip = get_sock_info(addr);  
+  fprintf(out, "[monitor] connect(%d, '%s', %u) = %d\n", fd, ip, len, ret);
+  free(ip);
+  return ret;
+}
+
+int socket(int domain, int socket_flag, int protocol){
+  INJECT_SYMBOL("libc.so.6", old_socket, "socket", int(*)(int, int, int));
+  int ret = old_socket(domain, socket_flag, protocol);
+  fprintf(out, "[monitor] socket(%d, %d, %d) = %d\n", domain, socket_flag, protocol, ret);
+  return ret;
+}
+
+int setsockopt(int fd, int level, int optname, const void* optval, socklen_t optlen){
+  INJECT_SYMBOL("libc.so.6", old_setsockopt, "setsockopt", int(*)(int, int, int, const void*, socklen_t));
+  int ret = old_setsockopt(fd ,level, optname, optval, optlen);
+  fprintf(out, "[monitor] setsockopt(%d, %d, %d, %p, %u) = %d\n", fd, level, optname, optval, optlen, ret);
+  return ret;
+}
+
